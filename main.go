@@ -19,7 +19,7 @@ func main() {
 	}
 	mongoURL, ok := os.LookupEnv("MONGO_URL")
 	if !ok {
-		mongoURL = "mongodb://triagem1:27017"
+		mongoURL = "mongodb://localhost:27017"
 	}
 	mongoDatabase, ok := os.LookupEnv("MONGO_DATABASE")
 	if !ok {
