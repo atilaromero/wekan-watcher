@@ -3,45 +3,77 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"io/ioutil"
 	"log"
 	"net/http"
 	"os"
 	"path"
+	"strings"
 
-	"github.com/globalsign/mgo"
-	"github.com/globalsign/mgo/bson"
 	"github.com/gorilla/mux"
 )
+
+type config struct {
+	port       string
+	graphqlURL string
+	user       string
+	pass       string
+	userID     string
+	token      string
+	listID     string
+	boardID    string
+}
 
 func main() {
 	port, ok := os.LookupEnv("PORT")
 	if !ok {
 		port = "80"
 	}
-	mongoURL, ok := os.LookupEnv("MONGO_URL")
+	graphqlURL, ok := os.LookupEnv("GRAPHQL_URL")
 	if !ok {
-		log.Fatalf("MONGO_URL not set. Example: MONGO_URL=mongodb://myserver:27017")
+		log.Fatalf("GRAPHQL_URL not set. Example: GRAPHQL_URL=http://myserver:80")
 		return
 	}
-	mongoDatabase, ok := os.LookupEnv("MONGO_DATABASE")
+	user, ok := os.LookupEnv("USER")
 	if !ok {
-		mongoDatabase = "sard"
+		log.Fatalf("Graphql USER not set.")
+		return
 	}
-	mongoCollection, ok := os.LookupEnv("MONGO_COLLECTION")
+	pass, ok := os.LookupEnv("PASS")
 	if !ok {
-		mongoCollection = "material"
+		log.Fatalf("Graphql PASS not set.")
+		return
 	}
-
-	client, err := mgo.Dial(mongoURL)
-	if err != nil {
-		log.Fatalf("could not connect to mongo database: %v\n", err)
+	listID, ok := os.LookupEnv("LISTID")
+	if !ok {
+		log.Fatalf("Wekan LISTID not set.")
+		return
+	}
+	boardID, ok := os.LookupEnv("BOARDID")
+	if !ok {
+		log.Fatalf("Wekan BOARDID not set.")
 		return
 	}
 
-	collection := client.DB(mongoDatabase).C(mongoCollection)
+	cnf := config{
+		port:       port,
+		graphqlURL: graphqlURL,
+		user:       user,
+		pass:       pass,
+		listID:     listID,
+		boardID:    boardID,
+	}
+
+	if cnf.token == "" {
+		err := cnf.getToken()
+		if err != nil {
+			log.Fatalf("error in getToken: %v", err)
+			return
+		}
+	}
 
 	r := mux.NewRouter()
-	r.HandleFunc("/", getListTodo(collection)).Methods("GET")
+	r.HandleFunc("/", getListTodo(cnf)).Methods("GET")
 
 	if err := http.ListenAndServe(":"+port, r); err != nil {
 		log.Fatalf("could not start server: %v\n", err)
@@ -49,24 +81,23 @@ func main() {
 	}
 }
 
-func getListTodo(collection *mgo.Collection) func(w http.ResponseWriter, r *http.Request) {
+func getListTodo(cnf config) func(w http.ResponseWriter, r *http.Request) {
 	return func(w http.ResponseWriter, r *http.Request) {
-		docs := make([]struct {
-			Path   string `bson:"path" json:"evidencePath"`
-			Output string `json:"outputPath"`
-		}, 0)
 
-		err := collection.Find(
-			bson.M{"state": "todo"},
-		).Limit(100).Select(bson.M{"path": 1}).All(&docs)
+		paths, err := cnf.listTodo()
 		if err != nil {
 			w.WriteHeader(http.StatusBadRequest)
-			fmt.Fprintf(w, "error fetching database: %v\n", err)
+			fmt.Fprintf(w, "error fetching cards: %v\n", err)
 			return
 		}
+		docs := make([]struct {
+			Path   string `json:"evidencePath"`
+			Output string `json:"outputPath"`
+		}, len(paths))
 
-		for i := 0; i < len(docs); i++ {
-			docs[i].Output = path.Join(path.Dir(docs[i].Path), "SARD")
+		for i, p := range paths {
+			docs[i].Path = p
+			docs[i].Output = path.Join(path.Dir(p), "SARD")
 		}
 
 		docsJSON, err := json.Marshal(docs)
@@ -79,4 +110,134 @@ func getListTodo(collection *mgo.Collection) func(w http.ResponseWriter, r *http
 		w.WriteHeader(http.StatusOK)
 		w.Write(docsJSON)
 	}
+}
+
+func (cnf config) listTodo() ([]string, error) {
+	q := fmt.Sprintf(`
+	query{
+		board(auth:{userId:"%s", token:"%s"}, _id:"%s"){
+			customFields{
+				id: _id
+				name
+			}
+			list(_id:"%s"){
+				cards{
+					title
+					customFields{
+						id: _id
+						value
+					}
+				}
+			}
+		}
+	}
+	`, cnf.userID, cnf.token, cnf.boardID, cnf.listID)
+	d := struct {
+		Errors []struct {
+			Message string
+		}
+		Data struct {
+			Board struct {
+				CustomFields []struct {
+					ID   string
+					Name string
+				}
+				List struct {
+					Cards []struct {
+						Title        string
+						CustomFields []struct {
+							ID    string
+							Value string
+						}
+					}
+				}
+			}
+		}
+	}{}
+	err := cnf.query(q, &d)
+	if err != nil {
+		return nil, err
+	}
+	if len(d.Errors) > 0 {
+		return nil, fmt.Errorf(d.Errors[0].Message)
+	}
+	fieldNames := make(map[string]string)
+	for _, x := range d.Data.Board.CustomFields {
+		fieldNames[x.Name] = x.ID
+	}
+	paths := []string{}
+	pathID, ok := fieldNames["path"]
+	if !ok {
+		return paths, fmt.Errorf("field path not found")
+	}
+	statusID, ok := fieldNames["status"]
+	if !ok {
+		return paths, fmt.Errorf("field status not found")
+	}
+	for _, card := range d.Data.Board.List.Cards {
+		path := ""
+		status := ""
+		for _, field := range card.CustomFields {
+			if field.ID == pathID {
+				path = field.Value
+			}
+			if field.ID == statusID {
+				status = field.Value
+			}
+		}
+		todo := status == "todo" || status == ""
+		if path != "" && todo {
+			paths = append(paths, path)
+		}
+	}
+	return paths, nil
+}
+
+func (cnf *config) getToken() error {
+	q := fmt.Sprintf(`
+	query{
+		authorize(user:"%s", password:"%s"){
+			userId
+			token
+		}
+	}
+	`, cnf.user, cnf.pass)
+	d := struct {
+		Errors []struct {
+			Message string
+		}
+		Data struct {
+			Authorize struct {
+				UserId string
+				Token  string
+			}
+		}
+	}{}
+	err := cnf.query(q, &d)
+	if err != nil {
+		return err
+	}
+	if len(d.Errors) > 0 {
+		return fmt.Errorf(d.Errors[0].Message)
+	}
+	cnf.userID = d.Data.Authorize.UserId
+	cnf.token = d.Data.Authorize.Token
+	return nil
+}
+
+func (cnf *config) query(q string, v interface{}) error {
+	r, err := http.Post(cnf.graphqlURL, "application/graphql", strings.NewReader(q))
+	if err != nil {
+		return err
+	}
+	defer r.Body.Close()
+	b, err := ioutil.ReadAll(r.Body)
+	if err != nil {
+		return err
+	}
+	err = json.Unmarshal(b, v)
+	if err != nil {
+		return err
+	}
+	return nil
 }
