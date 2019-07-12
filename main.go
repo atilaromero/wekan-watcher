@@ -20,8 +20,8 @@ type config struct {
 	pass       string
 	userID     string
 	token      string
-	listID     string
-	boardID    string
+	list       string
+	board      string
 }
 
 func main() {
@@ -44,14 +44,14 @@ func main() {
 		log.Fatalf("Graphql PASS not set.")
 		return
 	}
-	listID, ok := os.LookupEnv("LISTID")
+	list, ok := os.LookupEnv("LIST")
 	if !ok {
-		log.Fatalf("Wekan LISTID not set.")
+		log.Fatalf("Wekan LIST not set.")
 		return
 	}
-	boardID, ok := os.LookupEnv("BOARDID")
+	board, ok := os.LookupEnv("BOARD")
 	if !ok {
-		log.Fatalf("Wekan BOARDID not set.")
+		log.Fatalf("Wekan BOARD not set.")
 		return
 	}
 
@@ -60,8 +60,8 @@ func main() {
 		graphqlURL: graphqlURL,
 		user:       user,
 		pass:       pass,
-		listID:     listID,
-		boardID:    boardID,
+		list:       list,
+		board:      board,
 	}
 
 	if cnf.token == "" {
@@ -115,12 +115,12 @@ func getListTodo(cnf config) func(w http.ResponseWriter, r *http.Request) {
 func (cnf config) listTodo() ([]string, error) {
 	q := fmt.Sprintf(`
 	query{
-		board(auth:{userId:"%s", token:"%s"}, _id:"%s"){
+		board(auth:{userId:"%s", token:"%s"}, title:"%s"){
 			customFields{
 				id: _id
 				name
 			}
-			list(_id:"%s"){
+			list(title:"%s"){
 				cards{
 					title
 					customFields{
@@ -131,7 +131,7 @@ func (cnf config) listTodo() ([]string, error) {
 			}
 		}
 	}
-	`, cnf.userID, cnf.token, cnf.boardID, cnf.listID)
+	`, cnf.userID, cnf.token, cnf.board, cnf.list)
 	d := struct {
 		Errors []struct {
 			Message string
