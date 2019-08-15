@@ -81,23 +81,20 @@ func main() {
 	}
 }
 
+type ToDo struct {
+	Path    string `json:"evidencePath"`
+	Output  string `json:"outputPath"`
+	Profile string `json:"profile"`
+}
+
 func getListTodo(cnf config) func(w http.ResponseWriter, r *http.Request) {
 	return func(w http.ResponseWriter, r *http.Request) {
 
-		paths, err := cnf.listTodo()
+		docs, err := cnf.listTodo()
 		if err != nil {
 			w.WriteHeader(http.StatusBadRequest)
 			fmt.Fprintf(w, "error fetching cards: %v\n", err)
 			return
-		}
-		docs := make([]struct {
-			Path   string `json:"evidencePath"`
-			Output string `json:"outputPath"`
-		}, len(paths))
-
-		for i, p := range paths {
-			docs[i].Path = p
-			docs[i].Output = path.Join(path.Dir(p), "SARD")
 		}
 
 		docsJSON, err := json.Marshal(docs)
@@ -112,7 +109,8 @@ func getListTodo(cnf config) func(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (cnf config) listTodo() ([]string, error) {
+func (cnf config) listTodo() ([]ToDo, error) {
+	todos := []ToDo{}
 	q := fmt.Sprintf(`
 	query{
 		board(auth:{userId:"%s", token:"%s"}, title:"%s"){
@@ -165,32 +163,44 @@ func (cnf config) listTodo() ([]string, error) {
 	for _, x := range d.Data.Board.CustomFields {
 		fieldNames[x.Name] = x.ID
 	}
-	paths := []string{}
 	pathID, ok := fieldNames["path"]
 	if !ok {
-		return paths, fmt.Errorf("field path not found")
+		return todos, fmt.Errorf("field path not found")
 	}
 	statusID, ok := fieldNames["status"]
 	if !ok {
-		return paths, fmt.Errorf("field status not found")
+		return todos, fmt.Errorf("field status not found")
+	}
+	profileID, ok := fieldNames["profile"]
+	if !ok {
+		return todos, fmt.Errorf("field profile not found")
 	}
 	for _, card := range d.Data.Board.List.Cards {
-		path := ""
+		_path := ""
 		status := ""
+		profile := "pedo"
 		for _, field := range card.CustomFields {
 			if field.ID == pathID {
-				path = field.Value
+				_path = field.Value
 			}
 			if field.ID == statusID {
 				status = field.Value
 			}
+			if field.ID == profileID {
+				profile = field.Value
+			}
 		}
 		todo := status == "todo" || status == ""
-		if path != "" && todo {
-			paths = append(paths, path)
+		if _path != "" && todo {
+			todo := ToDo{
+				Path:    _path,
+				Profile: profile,
+				Output:  path.Join(path.Dir(_path), "SARD"),
+			}
+			todos = append(todos, todo)
 		}
 	}
-	return paths, nil
+	return todos, nil
 }
 
 func (cnf *config) getToken() error {
