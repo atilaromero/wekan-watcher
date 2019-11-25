@@ -195,7 +195,7 @@ func (cnf config) listTodo() ([]ToDo, error) {
 			todo := ToDo{
 				Path:    _path,
 				Profile: profile,
-				Output:  path.Join(path.Dir(_path), "SARD"),
+				Output:  "SARD",
 			}
 			todos = append(todos, todo)
 		}
