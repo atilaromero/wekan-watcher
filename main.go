@@ -96,7 +96,7 @@ func getListTodo(cnf config) func(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		docsJSON, err := json.Marshal(docs)
+		docsJSON, err := json.MarshalIndent(docs, "", "  ")
 		if err != nil {
 			w.WriteHeader(http.StatusBadRequest)
 			fmt.Fprintf(w, "error building json: %v\n", err)
